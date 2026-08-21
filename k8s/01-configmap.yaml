@@ -1,0 +1,57 @@
+# =============================================================================
+# ConfigMap: configuracion EXTERNALIZADA de la aplicacion.
+#
+# POR QUE ES OBLIGATORIO Y NO OPCIONAL
+# ------------------------------------
+# ControlCalculadora.java inyecta tres propiedades con @Value SIN valor por
+# defecto:
+#     @Value("${app.message.error}")  private String mensajeError;
+#     @Value("${db.server}")          private String server;
+#     @Value("${db.user}")            private String user;
+#
+# Si alguna falta, Spring no puede construir el bean y el contexto NO arranca.
+# El Pod entraria en CrashLoopBackOff. La imagen trae application.properties
+# empaquetado, asi que hay valores de respaldo, pero el objetivo del reto es
+# demostrar que la configuracion viene de FUERA de la imagen.
+#
+# MAPEO PROPIEDAD -> VARIABLE DE ENTORNO (relaxed binding de Spring Boot)
+# ----------------------------------------------------------------------
+#     app.message.error  ->  APP_MESSAGE_ERROR
+#     db.server          ->  DB_SERVER
+#     db.user            ->  DB_USER
+# La regla es: mayusculas y los puntos se sustituyen por guiones bajos.
+# Las variables de entorno tienen MAS prioridad que application.properties en
+# el orden de precedencia de Spring Boot, por eso lo del ConfigMap gana.
+#
+# VALORES DELIBERADAMENTE DISTINTOS EN CADA ENTORNO
+# -------------------------------------------------
+#   application.properties (dentro del JAR) : admin       , localhost
+#   docker run -e ...        (FASE 3)       : gerald      , docker-local
+#   este ConfigMap           (FASE 7)       : gerald-k8s  , k8s-minikube
+#
+# Asi, al abrir GET / en el navegador y ver "gerald-k8s,k8s-minikube" queda
+# demostrado SIN AMBIGUEDAD que el valor sale del ConfigMap y no de la imagen
+# ni de la ejecucion local. Es la evidencia estrella del reto.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: micro-calc-config
+  namespace: micro-calc
+  labels:
+    app.kubernetes.io/name: micro-calc
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+    app.kubernetes.io/component: configuration
+data:
+  # -> db.user     : lo devuelve GET /  (primer campo)
+  DB_USER: "gerald-k8s"
+
+  # -> db.server   : lo devuelve GET /  (segundo campo)
+  DB_SERVER: "k8s-minikube"
+
+  # -> app.message.error : lo devuelve GET /div/{a}/0 en el campo "error".
+  # Sin comillas embebidas, a diferencia del application.properties original
+  # (que tiene comillas literales dentro del valor). El contraste tambien sirve
+  # como evidencia de que la fuente cambio.
+  APP_MESSAGE_ERROR: "Division por cero no permitida (valor desde ConfigMap)"

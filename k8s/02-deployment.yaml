@@ -1,0 +1,205 @@
+# =============================================================================
+# Deployment de micro-calc
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: micro-calc
+  namespace: micro-calc
+  labels:
+    app.kubernetes.io/name: micro-calc
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 2
+
+  # Conserva solo 3 ReplicaSets antiguos: suficiente para hacer rollback y
+  # evita acumular basura en etcd.
+  revisionHistoryLimit: 3
+
+  # Si el rollout no progresa en 5 minutos, se marca como fallido en lugar de
+  # quedarse colgado indefinidamente.
+  progressDeadlineSeconds: 300
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: micro-calc
+
+  # ---------------------------------------------------------------------------
+  # Estrategia de despliegue
+  # ---------------------------------------------------------------------------
+  # maxUnavailable: 0  ->  NUNCA se baja de las replicas deseadas durante una
+  # actualizacion: Kubernetes crea el Pod nuevo, espera a que su readinessProbe
+  # pase, y solo entonces retira el viejo. Cero downtime.
+  # maxSurge: 1        ->  como mucho un Pod extra por encima de las replicas.
+  #
+  # Ojo: con maxUnavailable: 0 hace falta capacidad para replicas+1 Pods. Con 2
+  # replicas de 384Mi de request eso son 3 x 384Mi = 1.1 GiB, que caben de sobra
+  # en el nodo de Minikube (4096 MB).
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: micro-calc
+        app.kubernetes.io/version: "1.0.0"
+        app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+        app.kubernetes.io/component: backend
+      annotations:
+        # Fuerza a que un cambio del ConfigMap se pueda propagar reiniciando
+        # con: kubectl rollout restart deployment/micro-calc -n micro-calc
+        # (envFrom NO recarga en caliente: las variables de entorno se fijan al
+        # crear el contenedor).
+        reto5.diplomado/config-source: "configmap/micro-calc-config"
+    spec:
+      # 30 s para que Spring cierre Tomcat de forma ordenada al recibir SIGTERM.
+      terminationGracePeriodSeconds: 30
+
+      # -----------------------------------------------------------------------
+      # securityContext a nivel de POD
+      # -----------------------------------------------------------------------
+      securityContext:
+        # runAsNonRoot: true EXIGE que la imagen declare un UID numerico != 0.
+        # El Dockerfile hace `USER 10001:10001`, por eso funciona. Si la imagen
+        # corriera como root, el kubelet rechazaria el Pod antes de arrancarlo
+        # con CreateContainerConfigError.
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: micro-calc
+
+          # -------------------------------------------------------------------
+          # IMAGEN CON TAG INMUTABLE - nunca :latest en un Deployment
+          # -------------------------------------------------------------------
+          # :latest es un puntero movil. Con :latest no se puede saber que
+          # version corre en el clúster, el rollback no es reproducible, y dos
+          # Pods creados con minutos de diferencia pueden ejecutar codigo
+          # distinto. El tag :1.0.0 identifica una imagen concreta.
+          # Publicada en: https://hub.docker.com/r/gthen95/micro-calc/tags
+          # Digest       : sha256:3aecbb12d624817e375456aa8a6ac47ac30de3104f255366d89ad2c297e65173
+          image: gthen95/micro-calc:1.0.0
+
+          # IfNotPresent: si la imagen ya esta en el nodo no se vuelve a bajar.
+          # Es lo correcto con un tag inmutable (el contenido nunca cambia) y
+          # ademas permite el plan B offline `minikube image load`, que deposita
+          # la imagen directamente en el nodo sin pasar por el registro.
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # -------------------------------------------------------------------
+          # Configuracion externalizada: TODAS las claves del ConfigMap se
+          # inyectan como variables de entorno de una sola vez.
+          # -------------------------------------------------------------------
+          envFrom:
+            - configMapRef:
+                name: micro-calc-config
+
+          # -------------------------------------------------------------------
+          # Recursos
+          # -------------------------------------------------------------------
+          # Los REQUESTS son OBLIGATORIOS para que el HPA funcione: el HPA
+          # calcula la utilizacion como (uso actual / request). Sin request de
+          # CPU la metrica es indefinida y el HPA se queda en <unknown>.
+          #
+          # limits.memory 512Mi combinado con -XX:MaxRAMPercentage=75 del
+          # Dockerfile da un heap maximo de 384 MiB (verificado midiendolo:
+          # MaxHeapSize = 402653184 bytes con --memory=512m).
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "384Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # -------------------------------------------------------------------
+          # PROBES
+          # -------------------------------------------------------------------
+          # El repositorio NO incluye spring-boot-starter-actuator, asi que no
+          # existen /actuator/health/liveness ni /readiness. Los probes apuntan
+          # a GET / que devuelve "usuario,servidor" con HTTP 200.
+          # Ventaja colateral: al depender de los @Value inyectados, si la
+          # configuracion faltara el contexto no arrancaria y el probe fallaria,
+          # asi que / si es un indicador real de salud para esta aplicacion.
+          # Ver docs/DECISIONES.md (ADR-07) para la alternativa con Actuator.
+
+          # startupProbe: ES EL QUE EVITA EL ERROR CLASICO.
+          # La JVM + Spring Boot tardan unos segundos en levantar. Sin
+          # startupProbe, el livenessProbe empieza a contar desde el segundo
+          # cero, falla 3 veces mientras Spring todavia arranca y MATA el Pod
+          # antes de que llegue a estar listo -> CrashLoopBackOff eterno.
+          # Mientras el startupProbe no pase, liveness y readiness quedan
+          # SUSPENDIDOS. Presupuesto: 30 x 5 s = 150 s (arranque medido: ~4 s).
+          startupProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+
+          # readinessProbe: decide si el Pod recibe trafico del Service.
+          # Al fallar, el Pod se saca de los Endpoints pero NO se reinicia.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+
+          # livenessProbe: decide si el contenedor se reinicia.
+          # Periodo mas largo y umbral holgado a proposito: un liveness
+          # agresivo genera reinicios en cascada bajo carga, que es peor que el
+          # problema que pretende resolver.
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # -------------------------------------------------------------------
+          # securityContext a nivel de CONTENEDOR
+          # -------------------------------------------------------------------
+          securityContext:
+            # Impide que el proceso gane privilegios via setuid/setgid.
+            allowPrivilegeEscalation: false
+            # Se descartan TODAS las capacidades de Linux. La aplicacion solo
+            # necesita abrir el puerto 8080, que al ser > 1024 no requiere
+            # NET_BIND_SERVICE.
+            capabilities:
+              drop:
+                - ALL
+            # Sistema de archivos raiz de solo lectura: si alguien lograra
+            # ejecutar codigo dentro del contenedor, no podria escribir un
+            # binario. Requiere montar /tmp como volumen escribible, porque
+            # Tomcat embebido necesita java.io.tmpdir.
+            readOnlyRootFilesystem: true
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        # emptyDir en memoria: se crea vacio con el Pod y muere con el. Es lo
+        # unico escribible del contenedor.
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,20 @@
+# =============================================================================
+# Namespace dedicado para el reto.
+#
+# Por que un namespace propio y no `default`:
+#   - Aisla los recursos: `kubectl delete namespace micro-calc` limpia TODO de
+#     una sola vez, sin dejar restos sueltos.
+#   - Permite aplicar cuotas y NetworkPolicies al conjunto en el futuro.
+#   - Hace que las capturas de `kubectl get all -n micro-calc` muestren
+#     unicamente lo del reto, sin ruido de otros objetos.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: micro-calc
+  labels:
+    # Etiquetas recomendadas por Kubernetes (app.kubernetes.io/*). Son el
+    # estandar de facto para que herramientas de terceros identifiquen la app.
+    app.kubernetes.io/name: micro-calc
+    app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+    app.kubernetes.io/managed-by: kubectl

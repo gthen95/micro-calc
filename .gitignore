@@ -31,3 +31,12 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# CA corporativa de inspeccion TLS: se regenera localmente, NO se publica.
+# Ver certs/README.md y scripts/00-extraer-ca-corporativa.ps1
+certs/*.crt
+certs/*.pem
+
+# Capturas de pantalla: pesan mucho y pueden contener datos del entorno.
+docs/capturas/*
+!docs/capturas/README.md

@@ -1,0 +1,46 @@
+# Excluye del contexto de build todo lo que no necesita la compilacion.
+# Reduce el tamano del contexto y evita invalidar la cache de Docker por
+# cambios en documentacion o manifiestos.
+
+# Artefactos de compilacion locales (se compila DENTRO del contenedor)
+target/
+build/
+
+# Control de versiones
+.git/
+.gitignore
+.gitattributes
+
+# Wrapper de Maven: NO se usa (apunta a Maven 3.8.6, insuficiente para
+# Spring Boot 4.1.0, que exige 3.9+). La etapa build usa el mvn de la imagen.
+.mvn/
+mvnw
+mvnw.cmd
+
+# Documentacion
+*.md
+docs/
+
+# Entregables del reto que no son codigo
+k8s/
+scripts/
+
+# IDEs
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.factorypath
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Sistema operativo
+Thumbs.db
+desktop.ini
+.DS_Store

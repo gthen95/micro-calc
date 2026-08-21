@@ -1,0 +1,76 @@
+# =============================================================================
+# HorizontalPodAutoscaler (autoscaling/v2)
+#
+# ADVERTENCIA - REQUISITO IMPRESCINDIBLE
+# --------------------------------------
+# El HPA lee las metricas de la Metrics API, que en Minikube NO esta disponible
+# de serie. Sin ella la columna TARGETS se queda en <unknown>/70% para siempre
+# y el HPA nunca escala. Hay que habilitar el addon:
+#
+#     minikube addons enable metrics-server
+#
+# Ya viene incluido en scripts/03-minikube-up.ps1. Tras habilitarlo, el
+# metrics-server tarda entre 30 y 60 segundos en recopilar la primera muestra;
+# durante ese tiempo <unknown> es NORMAL, no un error.
+#
+# SEGUNDO REQUISITO: el contenedor DEBE declarar `resources.requests.cpu`.
+# El HPA calcula la utilizacion como (uso actual / request). Sin request de CPU
+# el cociente es indefinido y la metrica tambien queda en <unknown>. El
+# Deployment declara requests.cpu: 200m, asi que el objetivo del 70% equivale a
+# 140m de CPU por Pod.
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: micro-calc
+  namespace: micro-calc
+  labels:
+    app.kubernetes.io/name: micro-calc
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+    app.kubernetes.io/component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: micro-calc
+
+  minReplicas: 2
+  maxReplicas: 5
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          # Utilization = porcentaje sobre el REQUEST, no sobre el LIMIT.
+          # 70% de 200m = 140m por Pod.
+          type: Utilization
+          averageUtilization: 70
+
+  # ---------------------------------------------------------------------------
+  # Comportamiento de escalado (autoscaling/v2)
+  # ---------------------------------------------------------------------------
+  # Sin este bloque se usan los valores por defecto. Se declaran explicitamente
+  # porque la asimetria entre subir y bajar es una decision de arquitectura:
+  # subir rapido protege el servicio, bajar despacio evita el "flapping"
+  # (crear y destruir Pods en bucle ante picos cortos de trafico).
+  behavior:
+    scaleUp:
+      # Sin ventana de estabilizacion: reacciona de inmediato a un pico.
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100          # como mucho, duplicar
+          periodSeconds: 15
+        - type: Pods
+          value: 2            # o anadir 2 Pods
+          periodSeconds: 15
+      selectPolicy: Max       # gana la politica que permita crecer mas
+    scaleDown:
+      # Espera 5 minutos de calma sostenida antes de reducir.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1            # retirar como maximo 1 Pod cada minuto
+          periodSeconds: 60

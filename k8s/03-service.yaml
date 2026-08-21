@@ -1,0 +1,54 @@
+# =============================================================================
+# Service de tipo NodePort
+#
+# NodePort abre el mismo puerto (30080) en TODOS los nodos del clúster y
+# reenvia a los Pods sanos. Se eligio NodePort porque:
+#   - LoadBalancer no tiene proveedor en Minikube (quedaria en <pending> salvo
+#     que se use `minikube tunnel`, que exige una terminal dedicada abierta).
+#   - Ingress requiere habilitar el addon y anadir una capa mas de indireccion,
+#     innecesaria para un solo servicio.
+#
+# ADVERTENCIA IMPORTANTE PARA WINDOWS + driver=docker:
+# ----------------------------------------------------
+# El "nodo" de Minikube es un CONTENEDOR que corre dentro de la VM WSL2 de
+# Rancher Desktop. Su IP (la que devuelve `minikube ip`, tipo 192.168.49.2)
+# pertenece a una red bridge de Docker que vive DENTRO de WSL2 y NO tiene ruta
+# desde el host Windows. Por eso http://<minikube-ip>:30080 normalmente NO
+# responde desde el navegador de Windows, aunque el Service este perfecto.
+#
+# La forma fiable de alcanzarlo desde Windows es `kubectl port-forward`, que
+# tunela sobre la conexion HTTPS ya establecida con el API server. Ver
+# scripts/05-pruebas.ps1 y docs/DECISIONES.md (ADR-05).
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: micro-calc
+  namespace: micro-calc
+  labels:
+    app.kubernetes.io/name: micro-calc
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/part-of: diplomado-arquitectura-reto5
+    app.kubernetes.io/component: backend
+spec:
+  type: NodePort
+
+  # El selector debe coincidir con las labels del template del Deployment.
+  # Si no coinciden, el Service se crea igual pero sin Endpoints y todas las
+  # peticiones dan "connection refused". Es el fallo silencioso mas comun.
+  selector:
+    app.kubernetes.io/name: micro-calc
+
+  ports:
+    - name: http
+      protocol: TCP
+      # Puerto del Service dentro del clúster:
+      #   http://micro-calc.micro-calc.svc.cluster.local:80
+      port: 80
+      # Puerto del contenedor. Se referencia por NOMBRE ("http"), no por numero:
+      # si algun dia el contenedor cambiara de puerto, basta editar el
+      # Deployment y este Service seguiria siendo correcto.
+      targetPort: http
+      # Puerto expuesto en la IP del nodo. Rango valido por defecto:
+      # 30000-32767.
+      nodePort: 30080
